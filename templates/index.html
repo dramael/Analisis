@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Sistema Predictivo de Delito</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+<style>
+body { margin:0; font-family:Arial; }
+#map { height:100vh; }
+
+#panel {
+    position:absolute;
+    left:10px;
+    top:10px;
+    z-index:999;
+    background:#1e1e1e;
+    color:#fff;
+    padding:12px;
+    border-radius:8px;
+    width:320px;
+}
+
+#panel label { font-size:12px; margin-top:6px; display:block; }
+#panel input, #panel select {
+    width:100%;
+    margin-top:3px;
+    padding:4px;
+    border-radius:4px;
+    border:none;
+}
+#panel button {
+    margin-top:8px;
+    padding:6px;
+    border:none;
+    border-radius:4px;
+    cursor:pointer;
+}
+#info {
+    margin-top:8px;
+    font-size:12px;
+    opacity:0.9;
+}
+.legend {
+    background: rgba(255,255,255,0.9);
+    padding:10px;
+    border-radius:8px;
+    font-size:12px;
+}
+</style>
+</head>
+
+<body>
+
+<div id="map"></div>
+
+<div id="panel">
+    <div style="font-weight:bold;margin-bottom:8px;">
+        Sistema Predictivo
+    </div>
+
+    <label>Fecha Inicio</label>
+    <input id="f_ini" type="date">
+
+    <label>Fecha Fin</label>
+    <input id="f_fin" type="date">
+
+    <label>Delito</label>
+    <select id="sel_delito"></select>
+
+    <label>Modalidad</label>
+    <select id="sel_modalidad"></select>
+
+    <hr>
+
+    <button id="btn_puntos">Ver Puntos</button>
+    <button id="btn_toggle_pts">Puntos: ON</button>
+
+    <button id="btn_gi">Ver Hotspots (Gi*)</button>
+
+    <label>Fecha base riesgo</label>
+    <input id="f_base_riesgo" type="date">
+
+    <button id="btn_riesgo">Ver Riesgo 7D</button>
+    <button id="btn_toggle_riesgo">Riesgo: ON</button>
+
+    <div id="info"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+var map = L.map('map').setView([-34.6, -58.45], 11);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap'
+}).addTo(map);
+
+let puntosLayer = null;
+let giLayer = null;
+let riesgoLayer = null;
+
+let puntosVisible = true;
+let riesgoVisible = true;
+
+function setInfo(msg){
+    document.getElementById("info").innerText = msg;
+}
+
+/* ==============================
+   CATALOGOS
+================================*/
+async function loadCatalogos(){
+    const res = await fetch("/api/catalogos");
+    const data = await res.json();
+
+    const selD = document.getElementById("sel_delito");
+    const selM = document.getElementById("sel_modalidad");
+
+    selD.innerHTML = `<option value="ALL">Todos</option>` +
+        data.delitos.map(d => `<option>${d}</option>`).join("");
+
+    selM.innerHTML = `<option value="ALL">Todas</option>` +
+        data.modalidades.map(m => `<option>${m}</option>`).join("");
+}
+
+/* ==============================
+   PUNTOS
+================================*/
+async function loadPuntos(){
+
+    const ini = document.getElementById("f_ini").value;
+    const fin = document.getElementById("f_fin").value;
+    const delito = document.getElementById("sel_delito").value;
+    const modalidad = document.getElementById("sel_modalidad").value;
+
+    if(!ini || !fin){
+        setInfo("Definir fecha inicio y fin");
+        return;
+    }
+
+    const url = `/api/puntos?fecha_inicio=${ini}&fecha_fin=${fin}` +
+                `&delito=${encodeURIComponent(delito)}` +
+                `&modalidad=${encodeURIComponent(modalidad)}`;
+
+    setInfo("Cargando puntos...");
+
+    const res = await fetch(url);
+    const geojson = await res.json();
+
+    if(puntosLayer) map.removeLayer(puntosLayer);
+
+    puntosLayer = L.geoJSON(geojson, {
+        pointToLayer: (feature, latlng) =>
+            L.circleMarker(latlng, {
+                radius: 3,
+                color: "#222",
+                fillColor: "#f39c12",
+                fillOpacity: 0.7
+            })
+    });
+
+    if(puntosVisible) puntosLayer.addTo(map);
+
+    setInfo("Puntos cargados");
+}
+
+/* ==============================
+   HOTSPOTS GI*
+================================*/
+async function loadGI(){
+
+    const ini = document.getElementById("f_ini").value;
+    if(!ini){
+        setInfo("Elegir fecha inicio");
+        return;
+    }
+
+    const periodo = ini.substring(0,7) + "-01";
+
+    const res = await fetch(`/api/gi?periodo=${periodo}`);
+    const geojson = await res.json();
+
+    if(giLayer) map.removeLayer(giLayer);
+
+    giLayer = L.geoJSON(geojson, {
+        style: function(feature){
+            const cat = feature.properties.categoria;
+            if(cat && cat.includes("Hotspot")) return { color:"red", fillOpacity:0.6 };
+            if(cat && cat.includes("Coldspot")) return { color:"blue", fillOpacity:0.6 };
+            return { color:"#999", fillOpacity:0.1 };
+        }
+    }).addTo(map);
+
+    setInfo("Hotspots cargados");
+}
+
+/* ==============================
+   RIESGO 7D
+================================*/
+
+function getQuantileBreaks(values){
+    const v = values.slice().sort((a,b)=>a-b);
+    const q = (p)=> v[Math.floor((v.length-1)*p)];
+    return [q(0.2), q(0.4), q(0.6), q(0.8)];
+}
+
+function colorByProb(p, breaks){
+    if (p >= breaks[3]) return "#800026";
+    if (p >= breaks[2]) return "#BD0026";
+    if (p >= breaks[1]) return "#E31A1C";
+    if (p >= breaks[0]) return "#FC4E2A";
+    return "#FFEDA0";
+}
+
+async function loadRiesgo(){
+
+    const fecha = document.getElementById("f_base_riesgo").value;
+    const url = fecha ? `/api/riesgo_7d?fecha_base=${fecha}` : `/api/riesgo_7d`;
+
+    setInfo("Cargando riesgo...");
+
+    const res = await fetch(url);
+    const geojson = await res.json();
+
+    if(!geojson.features || geojson.features.length === 0){
+        setInfo("No hay riesgo disponible");
+        return;
+    }
+
+    const probs = geojson.features.map(f => f.properties.prob);
+    const breaks = getQuantileBreaks(probs);
+
+    if(riesgoLayer) map.removeLayer(riesgoLayer);
+
+    riesgoLayer = L.geoJSON(geojson, {
+        style: function(feature){
+            const p = feature.properties.prob;
+            return {
+                color:"#333",
+                weight:0.2,
+                fillOpacity:0.7,
+                fillColor: colorByProb(p, breaks)
+            };
+        }
+    });
+
+    if(riesgoVisible) riesgoLayer.addTo(map);
+
+    setInfo("Riesgo 7D cargado");
+}
+
+/* ==============================
+   BOTONES
+================================*/
+document.getElementById("btn_puntos").addEventListener("click", loadPuntos);
+document.getElementById("btn_gi").addEventListener("click", loadGI);
+document.getElementById("btn_riesgo").addEventListener("click", loadRiesgo);
+
+document.getElementById("btn_toggle_pts").addEventListener("click", function(){
+    puntosVisible = !puntosVisible;
+    this.innerText = "Puntos: " + (puntosVisible ? "ON" : "OFF");
+    if(!puntosLayer) return;
+    if(puntosVisible) puntosLayer.addTo(map);
+    else map.removeLayer(puntosLayer);
+});
+
+document.getElementById("btn_toggle_riesgo").addEventListener("click", function(){
+    riesgoVisible = !riesgoVisible;
+    this.innerText = "Riesgo: " + (riesgoVisible ? "ON" : "OFF");
+    if(!riesgoLayer) return;
+    if(riesgoVisible) riesgoLayer.addTo(map);
+    else map.removeLayer(riesgoLayer);
+});
+
+/* ==============================
+   DEFAULTS
+================================*/
+document.getElementById("f_ini").value = "2024-01-01";
+document.getElementById("f_fin").value = "2024-01-31";
+document.getElementById("f_base_riesgo").value = "2025-12-31";
+
+loadCatalogos();
+</script>
+
+</body>
+</html>

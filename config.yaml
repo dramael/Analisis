@@ -1,0 +1,12 @@
+database:
+  host: 192.168.10.41
+  port: 5432
+  dbname: cartografia
+  user: python
+  password: 'PyT0n#'
+  schema: analisis
+
+server:
+  debug: true
+  host: 0.0.0.0
+  port: 5000
