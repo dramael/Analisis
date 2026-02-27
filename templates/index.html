@@ -2,9 +2,11 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Sistema Predictivo de Delito</title>
+<title>Módulo Diagnóstico - Delito</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
 
 <style>
 body { margin:0; font-family:Arial; }
@@ -14,39 +16,59 @@ body { margin:0; font-family:Arial; }
     position:absolute;
     left:10px;
     top:10px;
-    z-index:999;
+    z-index:1000;
     background:#1e1e1e;
     color:#fff;
-    padding:12px;
+    padding:15px;
     border-radius:8px;
     width:320px;
 }
 
+#panel h3 { margin-top:0; }
+
 #panel label { font-size:12px; margin-top:6px; display:block; }
+
 #panel input, #panel select {
     width:100%;
-    margin-top:3px;
-    padding:4px;
+    padding:5px;
     border-radius:4px;
     border:none;
+    margin-top:3px;
 }
+
 #panel button {
-    margin-top:8px;
+    width:100%;
     padding:6px;
+    margin-top:6px;
     border:none;
     border-radius:4px;
     cursor:pointer;
+    font-weight:bold;
 }
-#info {
-    margin-top:8px;
-    font-size:12px;
-    opacity:0.9;
+
+#badge_moran {
+    margin-top:10px;
+    padding:6px;
+    border-radius:4px;
+    text-align:center;
+    font-weight:bold;
 }
+
+#contador_puntos {
+    margin-top:6px;
+    font-size:13px;
+}
+
 .legend {
-    background: rgba(255,255,255,0.9);
+    position:absolute;
+    right:10px;
+    bottom:20px;
+    z-index:1000;
+    background:white;
     padding:10px;
-    border-radius:8px;
+    border-radius:6px;
     font-size:12px;
+    box-shadow:0 0 5px rgba(0,0,0,0.3);
 }
 </style>
 </head>
@@ -56,233 +78,237 @@ body { margin:0; font-family:Arial; }
 <div id="map"></div>
 
 <div id="panel">
-    <div style="font-weight:bold;margin-bottom:8px;">
-        Sistema Predictivo
-    </div>
 
-    <label>Fecha Inicio</label>
-    <input id="f_ini" type="date">
+  <h3>Diagnóstico</h3>
 
-    <label>Fecha Fin</label>
-    <input id="f_fin" type="date">
+  <label>Fecha Inicio</label>
+  <input type="date" id="f_ini">
 
-    <label>Delito</label>
-    <select id="sel_delito"></select>
+  <label>Fecha Fin</label>
+  <input type="date" id="f_fin">
 
-    <label>Modalidad</label>
-    <select id="sel_modalidad"></select>
+  <label>Delito</label>
+  <select id="sel_delito"></select>
 
-    <hr>
+  <label>Modalidad</label>
+  <select id="sel_modalidad"></select>
 
-    <button id="btn_puntos">Ver Puntos</button>
-    <button id="btn_toggle_pts">Puntos: ON</button>
+  <button onclick="cargarHeatmap()">Heatmap</button>
+  <button onclick="cargarGI()">Getis-Ord Gi*</button>
+  <button onclick="cargarMoran()">Moran Global</button>
+  <button onclick="togglePuntos()">Mostrar/Ocultar Puntos</button>
 
-    <button id="btn_gi">Ver Hotspots (Gi*)</button>
+  <div id="badge_moran"></div>
+  <div id="contador_puntos"></div>
 
-    <label>Fecha base riesgo</label>
-    <input id="f_base_riesgo" type="date">
-
-    <button id="btn_riesgo">Ver Riesgo 7D</button>
-    <button id="btn_toggle_riesgo">Riesgo: ON</button>
-
-    <div id="info"></div>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- ✅ Leyenda hardcodeada: siempre visible -->
+<div id="leyenda" class="legend">
+  <b>Hotspots / Coldspots</b><br><br>
+
+  <div style="display:flex;align-items:center;margin-bottom:4px;">
+    <div style="width:15px;height:15px;background:#b71c1c;margin-right:6px;"></div>
+    Hotspot 99%
+  </div>
+
+  <div style="display:flex;align-items:center;margin-bottom:4px;">
+    <div style="width:15px;height:15px;background:#ef5350;margin-right:6px;"></div>
+    Hotspot 95%
+  </div>
+
+  <div style="display:flex;align-items:center;margin-bottom:4px;">
+    <div style="width:15px;height:15px;background:#0d47a1;margin-right:6px;"></div>
+    Coldspot 99%
+  </div>
+
+  <div style="display:flex;align-items:center;margin-bottom:4px;">
+    <div style="width:15px;height:15px;background:#64b5f6;margin-right:6px;"></div>
+    Coldspot 95%
+  </div>
+
+  <div style="display:flex;align-items:center;margin-bottom:4px;">
+    <div style="width:15px;height:15px;background:#bdbdbd;margin-right:6px;"></div>
+    No significativo
+  </div>
+
+  <div style="display:flex;align-items:center;margin-bottom:4px;">
+    <div style="width:15px;height:15px;background:#9e9e9e;margin-right:6px;"></div>
+    Sin eventos
+  </div>
+</div>
 
 <script>
-var map = L.map('map').setView([-34.6, -58.45], 11);
+// =============================
+// MAPA
+// =============================
+var map = L.map('map').setView([-34.61, -58.44], 11);
 
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap'
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+    attribution:'© OpenStreetMap'
 }).addTo(map);
 
-let puntosLayer = null;
+let heatLayer = null;
 let giLayer = null;
-let riesgoLayer = null;
+let puntosLayer = null;
 
-let puntosVisible = true;
-let riesgoVisible = true;
 
-function setInfo(msg){
-    document.getElementById("info").innerText = msg;
-}
-
-/* ==============================
-   CATALOGOS
-================================*/
-async function loadCatalogos(){
-    const res = await fetch("/api/catalogos");
-    const data = await res.json();
-
-    const selD = document.getElementById("sel_delito");
-    const selM = document.getElementById("sel_modalidad");
-
-    selD.innerHTML = `<option value="ALL">Todos</option>` +
-        data.delitos.map(d => `<option>${d}</option>`).join("");
-
-    selM.innerHTML = `<option value="ALL">Todas</option>` +
-        data.modalidades.map(m => `<option>${m}</option>`).join("");
-}
-
-/* ==============================
-   PUNTOS
-================================*/
-async function loadPuntos(){
-
+// =============================
+// PARAMETROS
+// =============================
+function getParams(){
     const ini = document.getElementById("f_ini").value;
     const fin = document.getElementById("f_fin").value;
     const delito = document.getElementById("sel_delito").value;
     const modalidad = document.getElementById("sel_modalidad").value;
 
-    if(!ini || !fin){
-        setInfo("Definir fecha inicio y fin");
-        return;
-    }
-
-    const url = `/api/puntos?fecha_inicio=${ini}&fecha_fin=${fin}` +
-                `&delito=${encodeURIComponent(delito)}` +
-                `&modalidad=${encodeURIComponent(modalidad)}`;
-
-    setInfo("Cargando puntos...");
-
-    const res = await fetch(url);
-    const geojson = await res.json();
-
-    if(puntosLayer) map.removeLayer(puntosLayer);
-
-    puntosLayer = L.geoJSON(geojson, {
-        pointToLayer: (feature, latlng) =>
-            L.circleMarker(latlng, {
-                radius: 3,
-                color: "#222",
-                fillColor: "#f39c12",
-                fillOpacity: 0.7
-            })
-    });
-
-    if(puntosVisible) puntosLayer.addTo(map);
-
-    setInfo("Puntos cargados");
+    return `fecha_inicio=${ini}&fecha_fin=${fin}&delito=${delito}&modalidad=${modalidad}`;
 }
 
-/* ==============================
-   HOTSPOTS GI*
-================================*/
-async function loadGI(){
 
-    const ini = document.getElementById("f_ini").value;
-    if(!ini){
-        setInfo("Elegir fecha inicio");
+// =============================
+// HEATMAP
+// =============================
+async function cargarHeatmap(){
+
+    const btn = event.target;
+
+    if(heatLayer){
+        map.removeLayer(heatLayer);
+        heatLayer = null;
+        btn.classList.remove("active");
         return;
     }
 
-    const periodo = ini.substring(0,7) + "-01";
+    const res = await fetch(`/api/diagnostico/heatmap?${getParams()}`);
+    const data = await res.json();
 
-    const res = await fetch(`/api/gi?periodo=${periodo}`);
-    const geojson = await res.json();
-
-    if(giLayer) map.removeLayer(giLayer);
-
-    giLayer = L.geoJSON(geojson, {
-        style: function(feature){
-            const cat = feature.properties.categoria;
-            if(cat && cat.includes("Hotspot")) return { color:"red", fillOpacity:0.6 };
-            if(cat && cat.includes("Coldspot")) return { color:"blue", fillOpacity:0.6 };
-            return { color:"#999", fillOpacity:0.1 };
-        }
+    heatLayer = L.heatLayer(data.points, {
+        radius: 25,
+        blur: 20,
+        maxZoom: 17
     }).addTo(map);
 
-    setInfo("Hotspots cargados");
+    btn.classList.add("active");
 }
 
-/* ==============================
-   RIESGO 7D
-================================*/
 
-function getQuantileBreaks(values){
-    const v = values.slice().sort((a,b)=>a-b);
-    const q = (p)=> v[Math.floor((v.length-1)*p)];
-    return [q(0.2), q(0.4), q(0.6), q(0.8)];
+// =============================
+// GI*
+// =============================
+async function cargarGI(){
+    const res = await fetch(`/api/diagnostico/gi?${getParams()}`);
+    const data = await res.json();
+
+    giLayer = L.geoJSON(data, {
+        style: function(feature){
+            return {
+                fillColor: feature.properties.color,
+                color:"#333",
+                weight:0.3,
+                fillOpacity:0.7
+            };
+        }
+    }).addTo(map);
 }
 
-function colorByProb(p, breaks){
-    if (p >= breaks[3]) return "#800026";
-    if (p >= breaks[2]) return "#BD0026";
-    if (p >= breaks[1]) return "#E31A1C";
-    if (p >= breaks[0]) return "#FC4E2A";
-    return "#FFEDA0";
+
+// =============================
+// MORAN
+// =============================
+async function cargarMoran(){
+    const res = await fetch(`/api/diagnostico/moran?${getParams()}`);
+    const data = await res.json();
+
+    const badge = document.getElementById("badge_moran");
+    badge.innerHTML = data.estado;
+    badge.style.background = data.color;
 }
 
-async function loadRiesgo(){
 
-    const fecha = document.getElementById("f_base_riesgo").value;
-    const url = fecha ? `/api/riesgo_7d?fecha_base=${fecha}` : `/api/riesgo_7d`;
+// =============================
+// PUNTOS REALES
+// =============================
+async function togglePuntos(){
 
-    setInfo("Cargando riesgo...");
+    const btn = event.target;
 
-    const res = await fetch(url);
-    const geojson = await res.json();
-
-    if(!geojson.features || geojson.features.length === 0){
-        setInfo("No hay riesgo disponible");
+    if(puntosLayer){
+        map.removeLayer(puntosLayer);
+        puntosLayer = null;
+        document.getElementById("contador_puntos").innerHTML = "";
+        btn.classList.remove("active");
         return;
     }
 
-    const probs = geojson.features.map(f => f.properties.prob);
-    const breaks = getQuantileBreaks(probs);
+    const res = await fetch(`/api/diagnostico/puntos?${getParams()}`);
+    const data = await res.json();
 
-    if(riesgoLayer) map.removeLayer(riesgoLayer);
+    puntosLayer = L.layerGroup();
 
-    riesgoLayer = L.geoJSON(geojson, {
-        style: function(feature){
-            const p = feature.properties.prob;
-            return {
-                color:"#333",
-                weight:0.2,
-                fillOpacity:0.7,
-                fillColor: colorByProb(p, breaks)
-            };
-        }
+    data.points.forEach(p=>{
+        L.circleMarker(p,{
+            radius:3,
+            color:"#000",
+            fillColor:"#ff0000",
+            fillOpacity:0.6
+        }).addTo(puntosLayer);
     });
 
-    if(riesgoVisible) riesgoLayer.addTo(map);
+    puntosLayer.addTo(map);
 
-    setInfo("Riesgo 7D cargado");
+    document.getElementById("contador_puntos").innerHTML =
+        "Eventos evaluados: <b>" + data.total + "</b>";
+
+    btn.classList.add("active");
 }
 
-/* ==============================
-   BOTONES
-================================*/
-document.getElementById("btn_puntos").addEventListener("click", loadPuntos);
-document.getElementById("btn_gi").addEventListener("click", loadGI);
-document.getElementById("btn_riesgo").addEventListener("click", loadRiesgo);
 
-document.getElementById("btn_toggle_pts").addEventListener("click", function(){
-    puntosVisible = !puntosVisible;
-    this.innerText = "Puntos: " + (puntosVisible ? "ON" : "OFF");
-    if(!puntosLayer) return;
-    if(puntosVisible) puntosLayer.addTo(map);
-    else map.removeLayer(puntosLayer);
-});
 
-document.getElementById("btn_toggle_riesgo").addEventListener("click", function(){
-    riesgoVisible = !riesgoVisible;
-    this.innerText = "Riesgo: " + (riesgoVisible ? "ON" : "OFF");
-    if(!riesgoLayer) return;
-    if(riesgoVisible) riesgoLayer.addTo(map);
-    else map.removeLayer(riesgoLayer);
-});
+// =============================
+// CARGAR CATALOGOS DINAMICOS
+// =============================
+async function cargarCatalogos(){
 
-/* ==============================
-   DEFAULTS
-================================*/
+    const res = await fetch("/api/catalogos");
+    const data = await res.json();
+
+    const selDelito = document.getElementById("sel_delito");
+    const selModalidad = document.getElementById("sel_modalidad");
+
+    selDelito.innerHTML = '<option value="ALL">Todos</option>';
+    selModalidad.innerHTML = '<option value="ALL">Todas</option>';
+
+    data.delitos.forEach(d=>{
+        const opt = document.createElement("option");
+        opt.value = d;
+        opt.text = d;
+        selDelito.appendChild(opt);
+    });
+
+    data.modalidades.forEach(m=>{
+        const opt = document.createElement("option");
+        opt.value = m;
+        opt.text = m;
+        selModalidad.appendChild(opt);
+    });
+}
+
+
+// =============================
+// DEFAULTS
+// =============================
 document.getElementById("f_ini").value = "2024-01-01";
 document.getElementById("f_fin").value = "2024-01-31";
-document.getElementById("f_base_riesgo").value = "2025-12-31";
 
-loadCatalogos();
+cargarCatalogos();
 </script>
+
+
+#panel button.active {
+    background-color: #1976d2;
+    color: white;
+}
 
 </body>
 </html>

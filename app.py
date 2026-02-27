@@ -1,21 +1,37 @@
-from flask import Flask
+from flask import Flask, render_template
+from routes.diagnostico_routes import diagnostico_bp
 import yaml
-from routes.map_routes import map_bp
-from routes.stats_routes import stats_bp
 
-with open("config.yaml", "r") as f:
-    config = yaml.safe_load(f)
 
+# =========================
+# Cargar configuración
+# =========================
+def load_config():
+    with open("config.yaml", "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+config = load_config()
+
+# =========================
+# Crear app
+# =========================
 app = Flask(__name__)
 
-app.register_blueprint(map_bp)
-app.register_blueprint(stats_bp)
+# Registrar blueprints
+app.register_blueprint(diagnostico_bp)
 
-from flask import render_template
-
+# =========================
+# Ruta principal
+# =========================
 @app.route("/")
 def home():
     return render_template("index.html")
+
+
+# =========================
+# Run
+# =========================
 if __name__ == "__main__":
     app.run(
         host=config["server"]["host"],
