@@ -1,0 +1,239 @@
+import psycopg2
+import psycopg2.extras
+import pandas as pd
+import numpy as np
+import joblib
+import io
+import json
+from datetime import timedelta
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import roc_auc_score
+import yaml
+
+with open("config.yaml","r") as f:
+    config = yaml.safe_load(f)
+
+DB = config["database"]
+SCHEMA = DB["schema"]
+
+FEATURES = ["lag1","sum7","dow","month"]
+
+
+def get_connection():
+    return psycopg2.connect(
+        host=DB["host"],
+        port=DB["port"],
+        dbname=DB["dbname"],
+        user=DB["user"],
+        password=DB["password"]
+    )
+
+
+def get_T():
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT max(fecha)
+            FROM {SCHEMA}.celda_dia_200m_all;
+        """)
+        T = cur.fetchone()[0]
+    finally:
+        conn.close()
+    return T
+
+
+# =============================
+# ENTRENAR MODELO ALL
+# =============================
+def train_model_all():
+
+    T = get_T()
+
+    conn = get_connection()
+    try:
+        query = f"""
+        SELECT
+            id_celda,
+            fecha,
+            conteo,
+
+            LAG(conteo,1) OVER (PARTITION BY id_celda ORDER BY fecha) AS lag1,
+
+            SUM(conteo) OVER (
+                PARTITION BY id_celda
+                ORDER BY fecha
+                ROWS BETWEEN 7 PRECEDING AND 1 PRECEDING
+            ) AS sum7,
+
+            EXTRACT(DOW FROM fecha) AS dow,
+            EXTRACT(MONTH FROM fecha) AS month
+
+        FROM {SCHEMA}.celda_dia_200m_all
+        WHERE fecha < %s;
+        """
+
+        df = pd.read_sql(query, conn, params=[T])
+    finally:
+        conn.close()
+
+    df = df.fillna(0)
+    df["target"] = (df["conteo"] > 0).astype(int)
+
+    X = df[FEATURES]
+    y = df["target"]
+
+    model = RandomForestClassifier(
+        n_estimators=200,
+        max_depth=10,
+        n_jobs=-1,
+        random_state=42
+    )
+
+    model.fit(X,y)
+
+    preds = model.predict_proba(X)[:,1]
+    auc = roc_auc_score(y, preds)
+
+    meta = {
+        "roc_auc": float(auc),
+        "cutoff_date": str(T),
+        "features": FEATURES
+    }
+
+    # Serializar modelo
+    buffer = io.BytesIO()
+    joblib.dump(model, buffer)
+    buffer.seek(0)
+    binary_model = buffer.read()
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+
+        cur.execute(f"""
+            INSERT INTO {SCHEMA}.modelos_ml
+            (nombre_modelo, fecha_entrenamiento, cutoff_date, modelo, meta)
+            VALUES (%s, now(), %s, %s, %s)
+            ON CONFLICT (nombre_modelo)
+            DO UPDATE SET
+                fecha_entrenamiento = now(),
+                cutoff_date = EXCLUDED.cutoff_date,
+                modelo = EXCLUDED.modelo,
+                meta = EXCLUDED.meta;
+        """, (
+            "rf_ALL",
+            T,
+            psycopg2.Binary(binary_model),
+            json.dumps(meta)
+        ))
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    return meta
+
+
+# =============================
+# CARGAR MODELO
+# =============================
+def load_model():
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT modelo
+            FROM {SCHEMA}.modelos_ml
+            WHERE nombre_modelo = 'rf_ALL';
+        """)
+        row = cur.fetchone()
+
+        if not row:
+            raise FileNotFoundError("Modelo ALL no entrenado.")
+
+        buffer = io.BytesIO(row[0])
+        model = joblib.load(buffer)
+
+    finally:
+        conn.close()
+
+    return model
+
+
+# =============================
+# PREDICCION
+# =============================
+def predict_next_days_geojson(horizonte=3):
+
+    horizonte = int(horizonte)
+    if horizonte < 1: horizonte = 1
+    if horizonte > 7: horizonte = 7
+
+    T = get_T()
+    model = load_model()
+
+    conn = get_connection()
+    try:
+        query = f"""
+        SELECT
+            g.id_celda,
+            g.geom,
+
+            COALESCE((
+                SELECT e.conteo
+                FROM {SCHEMA}.celda_dia_200m_all e
+                WHERE e.id_celda = g.id_celda
+                  AND e.fecha = (%s::date - interval '1 day')::date
+            ),0) AS lag1,
+
+            COALESCE((
+                SELECT SUM(e.conteo)
+                FROM {SCHEMA}.celda_dia_200m_all e
+                WHERE e.id_celda = g.id_celda
+                  AND e.fecha BETWEEN (%s::date - interval '7 day')::date
+                                   AND (%s::date - interval '1 day')::date
+            ),0) AS sum7,
+
+            EXTRACT(DOW FROM %s::date) AS dow,
+            EXTRACT(MONTH FROM %s::date) AS month
+
+        FROM {SCHEMA}.grilla_200 g
+        ORDER BY id_celda;
+        """
+
+        df = pd.read_sql(query, conn,
+                         params=[T+timedelta(days=1),
+                                 T+timedelta(days=1),
+                                 T+timedelta(days=1),
+                                 T+timedelta(days=1)],
+                         geom_col="geom")
+
+    finally:
+        conn.close()
+
+    df = df.fillna(0)
+    X = df[FEATURES]
+
+    probs = model.predict_proba(X)[:,1]
+    df["riesgo_pct"] = probs * 100
+
+    features = []
+
+    for _, row in df.iterrows():
+        features.append({
+            "type":"Feature",
+            "geometry": json.loads(row["geom"].to_json()),
+            "properties":{
+                "id_celda": int(row["id_celda"]),
+                "riesgo_pct": round(row["riesgo_pct"],2)
+            }
+        })
+
+    return {
+        "type":"FeatureCollection",
+        "fecha_base": str(T),
+        "horizonte": horizonte,
+        "features": features
+    }

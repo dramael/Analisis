@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Módulo Diagnóstico - Delito</title>
+<title>Delito - Diagnóstico + Predicción</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -12,7 +12,8 @@
 body { margin:0; font-family:Arial; }
 #map { height:100vh; }
 
-#panel {
+/* Panel izquierdo */
+#panel-left {
     position:absolute;
     left:10px;
     top:10px;
@@ -24,51 +25,64 @@ body { margin:0; font-family:Arial; }
     width:320px;
 }
 
-#panel h3 { margin-top:0; }
+/* Panel derecho */
+#panel-right {
+    position:absolute;
+    right:10px;
+    top:10px;
+    z-index:1000;
+    background:#ffffff;
+    color:#111;
+    padding:15px;
+    border-radius:8px;
+    width:340px;
+    box-shadow:0 0 8px rgba(0,0,0,0.25);
+}
 
-#panel label { font-size:12px; margin-top:6px; display:block; }
+h3 { margin:0 0 10px 0; }
+label { font-size:12px; margin-top:6px; display:block; }
 
-#panel input, #panel select {
+input, select {
     width:100%;
-    padding:5px;
+    padding:6px;
     border-radius:4px;
-    border:none;
+    border:1px solid #ddd;
     margin-top:3px;
 }
 
-#panel button {
+button {
     width:100%;
-    padding:6px;
-    margin-top:6px;
+    padding:8px;
+    margin-top:8px;
     border:none;
     border-radius:4px;
     cursor:pointer;
     font-weight:bold;
 }
 
-#badge_moran {
+button.active {
+    background-color:#1976d2 !important;
+    color:white !important;
+}
+
+.small { font-size:12px; }
+hr { border:none; border-top:1px solid #eee; margin:10px 0; }
+
+.legend-box {
     margin-top:10px;
-    padding:6px;
-    border-radius:4px;
-    text-align:center;
-    font-weight:bold;
-}
-
-#contador_puntos {
-    margin-top:6px;
-    font-size:13px;
-}
-
-.legend {
-    position:absolute;
-    right:10px;
-    bottom:20px;
-    z-index:1000;
-    background:white;
     padding:10px;
+    border:1px solid #eee;
     border-radius:6px;
+    background:#fafafa;
     font-size:12px;
-    box-shadow:0 0 5px rgba(0,0,0,0.3);
+}
+
+.row { display:flex; align-items:center; margin-bottom:6px; }
+.swatch {
+    width:16px; height:16px;
+    border-radius:3px;
+    margin-right:8px;
+    border:1px solid #ddd;
 }
 </style>
 </head>
@@ -77,8 +91,10 @@ body { margin:0; font-family:Arial; }
 
 <div id="map"></div>
 
-<div id="panel">
-
+<!-- =============================
+     PANEL IZQUIERDO (Diagnóstico)
+============================= -->
+<div id="panel-left">
   <h3>Diagnóstico</h3>
 
   <label>Fecha Inicio</label>
@@ -93,222 +109,166 @@ body { margin:0; font-family:Arial; }
   <label>Modalidad</label>
   <select id="sel_modalidad"></select>
 
-  <button onclick="cargarHeatmap()">Heatmap</button>
-  <button onclick="cargarGI()">Getis-Ord Gi*</button>
+  <button id="btn-heat" onclick="toggleHeatmap(event)">Heatmap</button>
+  <button id="btn-gi" onclick="toggleGI(event)">Getis-Ord Gi*</button>
   <button onclick="cargarMoran()">Moran Global</button>
-  <button onclick="togglePuntos()">Mostrar/Ocultar Puntos</button>
+  <button id="btn-puntos" onclick="togglePuntos(event)">Mostrar/Ocultar Puntos</button>
 
   <div id="badge_moran"></div>
   <div id="contador_puntos"></div>
-
 </div>
 
-<!-- ✅ Leyenda hardcodeada: siempre visible -->
-<div id="leyenda" class="legend">
-  <b>Hotspots / Coldspots</b><br><br>
+<!-- =============================
+     PANEL DERECHO (Predicción)
+============================= -->
+<div id="panel-right">
 
-  <div style="display:flex;align-items:center;margin-bottom:4px;">
-    <div style="width:15px;height:15px;background:#b71c1c;margin-right:6px;"></div>
-    Hotspot 99%
+  <h3>Predicción</h3>
+
+  <div class="small">
+    T se toma automáticamente como el último día disponible.<br>
+    Modelo ALL (criminalidad agregada).
   </div>
 
-  <div style="display:flex;align-items:center;margin-bottom:4px;">
-    <div style="width:15px;height:15px;background:#ef5350;margin-right:6px;"></div>
-    Hotspot 95%
+  <hr>
+
+  <div class="small">
+    <b>Estado del Modelo</b><br>
+    Último dato (T): <span id="pred-fecha-base">--</span><br>
+    Modelo entrenado: <span id="pred-fecha-entrenado">No</span>
   </div>
 
-  <div style="display:flex;align-items:center;margin-bottom:4px;">
-    <div style="width:15px;height:15px;background:#0d47a1;margin-right:6px;"></div>
-    Coldspot 99%
+  <button id="btn-train" onclick="entrenarModelo()">Entrenar Modelo</button>
+
+  <hr>
+
+  <label>Horizonte (días)</label>
+  <select id="horizonte">
+    <option value="1">1 día</option>
+    <option value="3">3 días</option>
+    <option value="7" selected>7 días</option>
+  </select>
+
+  <button id="btn-pred" onclick="togglePrediccion(event)">Ver Predicción</button>
+
+  <div style="margin-top:10px;">
+    <div class="small"><b>Resumen</b></div>
+    <div class="small" id="pred-resumen">Sin predicción cargada.</div>
   </div>
 
-  <div style="display:flex;align-items:center;margin-bottom:4px;">
-    <div style="width:15px;height:15px;background:#64b5f6;margin-right:6px;"></div>
-    Coldspot 95%
+  <div class="legend-box">
+    <div class="small"><b>Leyenda riesgo (0–100%)</b></div>
+    <div style="height:6px;"></div>
+
+    <div class="row"><div class="swatch" style="background:#d73027;"></div> Alto (≥ 70%)</div>
+    <div class="row"><div class="swatch" style="background:#fc8d59;"></div> Medio (50–69%)</div>
+    <div class="row"><div class="swatch" style="background:#fee08b;"></div> Bajo (30–49%)</div>
+    <div class="row"><div class="swatch" style="background:#d9d9d9;"></div> Muy bajo (&lt; 30%)</div>
   </div>
 
-  <div style="display:flex;align-items:center;margin-bottom:4px;">
-    <div style="width:15px;height:15px;background:#bdbdbd;margin-right:6px;"></div>
-    No significativo
-  </div>
-
-  <div style="display:flex;align-items:center;margin-bottom:4px;">
-    <div style="width:15px;height:15px;background:#9e9e9e;margin-right:6px;"></div>
-    Sin eventos
-  </div>
 </div>
 
 <script>
+
 // =============================
 // MAPA
 // =============================
 var map = L.map('map').setView([-34.61, -58.44], 11);
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-    attribution:'© OpenStreetMap'
+  attribution:'© OpenStreetMap'
 }).addTo(map);
 
-let heatLayer = null;
-let giLayer = null;
-let puntosLayer = null;
-
+let predLayer = null;
 
 // =============================
-// PARAMETROS
+// ESTADO MODELO
 // =============================
-function getParams(){
-    const ini = document.getElementById("f_ini").value;
-    const fin = document.getElementById("f_fin").value;
-    const delito = document.getElementById("sel_delito").value;
-    const modalidad = document.getElementById("sel_modalidad").value;
+async function cargarEstadoModelo(){
+  const res = await fetch("/api/prediccion/status");
+  const data = await res.json();
 
-    return `fecha_inicio=${ini}&fecha_fin=${fin}&delito=${delito}&modalidad=${modalidad}`;
+  document.getElementById("pred-fecha-base").innerHTML =
+    data.fecha_base || "--";
+
+  document.getElementById("pred-fecha-entrenado").innerHTML =
+    data.modelo_entrenado ? "Sí" : "No";
 }
 
+// =============================
+// ENTRENAR MODELO
+// =============================
+async function entrenarModelo(){
+
+  const btn = document.getElementById("btn-train");
+  btn.innerHTML = "Entrenando...";
+  btn.disabled = true;
+
+  try{
+    const res = await fetch("/api/prediccion/train");
+    const data = await res.json();
+
+    document.getElementById("pred-fecha-entrenado").innerHTML = "Sí";
+    document.getElementById("pred-fecha-base").innerHTML =
+      data.meta.cutoff_date;
+
+    alert("Modelo entrenado.\nAUC: " + data.meta.roc_auc.toFixed(3));
+  } catch(e){
+    alert("Error entrenando modelo.");
+  }
+
+  btn.innerHTML = "Entrenar Modelo";
+  btn.disabled = false;
+}
 
 // =============================
-// HEATMAP
+// PREDICCIÓN
 // =============================
-async function cargarHeatmap(){
+async function togglePrediccion(ev){
 
-    const btn = event.target;
+  const btn = ev.target;
 
-    if(heatLayer){
-        map.removeLayer(heatLayer);
-        heatLayer = null;
-        btn.classList.remove("active");
-        return;
+  if(predLayer){
+    map.removeLayer(predLayer);
+    predLayer = null;
+    btn.classList.remove("active");
+    document.getElementById("pred-resumen").innerHTML =
+      "Sin predicción cargada.";
+    return;
+  }
+
+  const horizonte = document.getElementById("horizonte").value;
+
+  const res = await fetch(`/api/prediccion?horizonte=${horizonte}`);
+  const data = await res.json();
+
+  predLayer = L.geoJSON(data, {
+    style: (f) => ({
+      fillColor: f.properties.color,
+      color:"#111",
+      weight:0.4,
+      fillOpacity:0.55
+    }),
+    onEachFeature: (feature, layer) => {
+      layer.bindPopup(
+        `<b>Celda:</b> ${feature.properties.id_celda}<br>` +
+        `<b>Riesgo:</b> ${feature.properties.riesgo_pct}%`
+      );
     }
+  }).addTo(map);
 
-    const res = await fetch(`/api/diagnostico/heatmap?${getParams()}`);
-    const data = await res.json();
+  document.getElementById("pred-resumen").innerHTML =
+    `<b>T:</b> ${data.fecha_base}<br>` +
+    `<b>Horizonte:</b> ${horizonte} día(s)<br>` +
+    `<b>Celdas:</b> ${data.features.length}`;
 
-    heatLayer = L.heatLayer(data.points, {
-        radius: 25,
-        blur: 20,
-        maxZoom: 17
-    }).addTo(map);
-
-    btn.classList.add("active");
+  btn.classList.add("active");
 }
 
-
 // =============================
-// GI*
-// =============================
-async function cargarGI(){
-    const res = await fetch(`/api/diagnostico/gi?${getParams()}`);
-    const data = await res.json();
+cargarEstadoModelo();
 
-    giLayer = L.geoJSON(data, {
-        style: function(feature){
-            return {
-                fillColor: feature.properties.color,
-                color:"#333",
-                weight:0.3,
-                fillOpacity:0.7
-            };
-        }
-    }).addTo(map);
-}
-
-
-// =============================
-// MORAN
-// =============================
-async function cargarMoran(){
-    const res = await fetch(`/api/diagnostico/moran?${getParams()}`);
-    const data = await res.json();
-
-    const badge = document.getElementById("badge_moran");
-    badge.innerHTML = data.estado;
-    badge.style.background = data.color;
-}
-
-
-// =============================
-// PUNTOS REALES
-// =============================
-async function togglePuntos(){
-
-    const btn = event.target;
-
-    if(puntosLayer){
-        map.removeLayer(puntosLayer);
-        puntosLayer = null;
-        document.getElementById("contador_puntos").innerHTML = "";
-        btn.classList.remove("active");
-        return;
-    }
-
-    const res = await fetch(`/api/diagnostico/puntos?${getParams()}`);
-    const data = await res.json();
-
-    puntosLayer = L.layerGroup();
-
-    data.points.forEach(p=>{
-        L.circleMarker(p,{
-            radius:3,
-            color:"#000",
-            fillColor:"#ff0000",
-            fillOpacity:0.6
-        }).addTo(puntosLayer);
-    });
-
-    puntosLayer.addTo(map);
-
-    document.getElementById("contador_puntos").innerHTML =
-        "Eventos evaluados: <b>" + data.total + "</b>";
-
-    btn.classList.add("active");
-}
-
-
-
-// =============================
-// CARGAR CATALOGOS DINAMICOS
-// =============================
-async function cargarCatalogos(){
-
-    const res = await fetch("/api/catalogos");
-    const data = await res.json();
-
-    const selDelito = document.getElementById("sel_delito");
-    const selModalidad = document.getElementById("sel_modalidad");
-
-    selDelito.innerHTML = '<option value="ALL">Todos</option>';
-    selModalidad.innerHTML = '<option value="ALL">Todas</option>';
-
-    data.delitos.forEach(d=>{
-        const opt = document.createElement("option");
-        opt.value = d;
-        opt.text = d;
-        selDelito.appendChild(opt);
-    });
-
-    data.modalidades.forEach(m=>{
-        const opt = document.createElement("option");
-        opt.value = m;
-        opt.text = m;
-        selModalidad.appendChild(opt);
-    });
-}
-
-
-// =============================
-// DEFAULTS
-// =============================
-document.getElementById("f_ini").value = "2024-01-01";
-document.getElementById("f_fin").value = "2024-01-31";
-
-cargarCatalogos();
 </script>
-
-
-#panel button.active {
-    background-color: #1976d2;
-    color: white;
-}
 
 </body>
 </html>

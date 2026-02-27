@@ -1,0 +1,12 @@
+Modelo Avanzado de Analisis Criminal.
+
+Tecnologia
+Postgres + Postgis + Python + Flask y TileServer
+
+
+El modelo consta de 2 partes:
+1) Herramientas estadisticas avanzadas como Moran y Getis*ort para determinar la correlacion espacial entre los delitos. Mapa de calor herramienta util para determinar areas de densidad criminal ajustada al zoom de la visualizaicon. Esta herramienta se adapta al filtro de fecha, delito y modalidad para mejorar la visualizaicon especifica.
+
+
+2) Modelo predictivo basado en Modelo Predictivo de Riesgo (MPR), este modelo predice en que % puede volver a ocurrir un evento delictivo en base a la informacion historica del servidor. Tomadno com punto de partia el ultimo ingreso de datos de esa Modalidad.
+
