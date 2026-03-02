@@ -9,6 +9,8 @@ from datetime import timedelta
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_auc_score
 import yaml
+import geopandas as gpd
+from shapely.geometry import mapping
 
 with open("config.yaml","r") as f:
     config = yaml.safe_load(f)
@@ -161,6 +163,15 @@ def load_model():
 
     return model
 
+def clasificar_riesgo(p):
+    if p >= 70:
+        return "Alto", "#d73027"
+    elif p >= 50:
+        return "Medio", "#fc8d59"
+    elif p >= 30:
+        return "Bajo", "#fee08b"
+    else:
+        return "Muy bajo", "#d9d9d900"
 
 # =============================
 # PREDICCION
@@ -177,38 +188,46 @@ def predict_next_days_geojson(horizonte=3):
     conn = get_connection()
     try:
         query = f"""
+            WITH base_fecha AS (
+            SELECT %s::date AS f
+        )
         SELECT
             g.id_celda,
-            g.geom,
+            ST_Transform(g.geom,4326) AS geom,
 
             COALESCE((
                 SELECT e.conteo
-                FROM {SCHEMA}.celda_dia_200m_all e
+                FROM analisis.celda_dia_200m_all e, base_fecha
                 WHERE e.id_celda = g.id_celda
-                  AND e.fecha = (%s::date - interval '1 day')::date
+                AND e.fecha = (f - interval '1 day')::date
             ),0) AS lag1,
 
             COALESCE((
                 SELECT SUM(e.conteo)
-                FROM {SCHEMA}.celda_dia_200m_all e
+                FROM analisis.celda_dia_200m_all e, base_fecha
                 WHERE e.id_celda = g.id_celda
-                  AND e.fecha BETWEEN (%s::date - interval '7 day')::date
-                                   AND (%s::date - interval '1 day')::date
+                AND e.fecha BETWEEN (f - interval '7 day')::date
+                                AND (f - interval '1 day')::date
             ),0) AS sum7,
 
-            EXTRACT(DOW FROM %s::date) AS dow,
-            EXTRACT(MONTH FROM %s::date) AS month
+            EXTRACT(DOW FROM f) AS dow,
+            EXTRACT(MONTH FROM f) AS month
 
-        FROM {SCHEMA}.grilla_200 g
+        FROM analisis.grilla_200 g, base_fecha
         ORDER BY id_celda;
         """
 
-        df = pd.read_sql(query, conn,
-                         params=[T+timedelta(days=1),
-                                 T+timedelta(days=1),
-                                 T+timedelta(days=1),
-                                 T+timedelta(days=1)],
-                         geom_col="geom")
+        fecha_pred = T + timedelta(days=1)
+        print("T:", T)
+        print("fecha_pred:", fecha_pred)
+        
+
+        df = gpd.read_postgis(
+            query,
+            conn,
+            params=[fecha_pred],
+            geom_col="geom"
+        )
 
     finally:
         conn.close()
@@ -217,17 +236,27 @@ def predict_next_days_geojson(horizonte=3):
     X = df[FEATURES]
 
     probs = model.predict_proba(X)[:,1]
+
+    if horizonte > 1:
+        probs = 1 - (1 - probs)**horizonte
+
     df["riesgo_pct"] = probs * 100
 
     features = []
 
     for _, row in df.iterrows():
+
+        riesgo = round(row["riesgo_pct"], 2)
+        categoria, color = clasificar_riesgo(riesgo)
+
         features.append({
-            "type":"Feature",
-            "geometry": json.loads(row["geom"].to_json()),
-            "properties":{
+            "type": "Feature",
+            "geometry": mapping(row.geom),
+            "properties": {
                 "id_celda": int(row["id_celda"]),
-                "riesgo_pct": round(row["riesgo_pct"],2)
+                "riesgo_pct": riesgo,
+                "categoria": categoria,
+                "color": color
             }
         })
 
@@ -237,3 +266,5 @@ def predict_next_days_geojson(horizonte=3):
         "horizonte": horizonte,
         "features": features
     }
+    
+
