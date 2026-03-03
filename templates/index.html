@@ -8,6 +8,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
 
+
 <style>
 body { margin:0; font-family:Arial; }
 #map { height:100vh; }
@@ -74,7 +75,10 @@ hr { border:none; border-top:1px solid #eee; margin:10px 0; }
 
 <!-- ================= PANEL IZQUIERDO ================= -->
 <div id="panel-left">
-  <h3>Diagnóstico</h3>
+  <h3> Soflex S.A <br>
+    
+    
+    Diagnóstico</h3>
 
   <label>Fecha Inicio</label>
   <input type="date" id="f_ini">
@@ -102,7 +106,7 @@ hr { border:none; border-top:1px solid #eee; margin:10px 0; }
   <h3>Predicción</h3>
 
   <div class="small">
-    T se toma automáticamente como el último día disponible.<br>
+    Modelo estadistico de predicción del delito.<br>
     Modelo Amplio.
   </div>
 
@@ -114,7 +118,7 @@ hr { border:none; border-top:1px solid #eee; margin:10px 0; }
     Modelo entrenado: <span id="pred-fecha-entrenado">No</span>
   </div>
 
-  <button id="btn-train" onclick="entrenarModelo()">Entrenar Modelo</button>
+  <!-- <button id="btn-train" onclick="entrenarModelo()">Entrenar Modelo</button>-->
 
   <hr>
 
@@ -282,21 +286,7 @@ async function cargarEstadoModelo(){
 }
 
 
-// ================= ENTRENAR =================
-async function entrenarModelo(){
-  const btn=document.getElementById("btn-train");
-  btn.innerHTML="Entrenando...";
-  btn.disabled=true;
 
-  const res=await fetch("/api/prediccion/train");
-  const data=await res.json();
-
-  document.getElementById("pred-fecha-base").innerHTML=data.meta.cutoff_date;
-  document.getElementById("pred-fecha-entrenado").innerHTML="Sí";
-
-  btn.innerHTML="Entrenar Modelo";
-  btn.disabled=false;
-}
 
 
 // ================= PREDICCION =================

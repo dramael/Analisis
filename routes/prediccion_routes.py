@@ -30,12 +30,6 @@ def api_status():
         return jsonify({"error": str(e)}), 500
 
 
-@prediccion_bp.route("/api/prediccion/train")
-def api_train():
-    meta = train_model_all()
-    return jsonify({"status": "Modelo entrenado", "meta": meta})
-
-
 @prediccion_bp.route("/api/prediccion")
 def api_prediccion():
     horizonte = int(request.args.get("horizonte", 3))

@@ -21,6 +21,12 @@ SCHEMA = DB["schema"]
 FEATURES = ["lag1","sum7","dow","month"]
 
 
+# =============================
+# CONFIGURACION ENTRENAMIENTO
+# =============================
+
+TRAIN_YEARS_BACK = 2   # 👈 CAMBIAR ACA (1, 2, 3, etc.)
+
 def get_connection():
     return psycopg2.connect(
         host=DB["host"],
@@ -48,12 +54,16 @@ def get_T():
 # =============================
 # ENTRENAR MODELO ALL
 # =============================
+
+
 def train_model_all():
 
     T = get_T()
 
     conn = get_connection()
     try:
+        
+        print('Query de entranamiento')
         query = f"""
         SELECT
             id_celda,
@@ -72,69 +82,14 @@ def train_model_all():
             EXTRACT(MONTH FROM fecha) AS month
 
         FROM {SCHEMA}.celda_dia_200m_all
-        WHERE fecha < %s;
+        WHERE fecha >= (%s::date - interval '{TRAIN_YEARS_BACK} years')
+          AND fecha < %s;
         """
 
-        df = pd.read_sql(query, conn, params=[T])
+        df = pd.read_sql(query, conn, params=[T, T])
+
     finally:
         conn.close()
-
-    df = df.fillna(0)
-    df["target"] = (df["conteo"] > 0).astype(int)
-
-    X = df[FEATURES]
-    y = df["target"]
-
-    model = RandomForestClassifier(
-        n_estimators=200,
-        max_depth=10,
-        n_jobs=-1,
-        random_state=42
-    )
-
-    model.fit(X,y)
-
-    preds = model.predict_proba(X)[:,1]
-    auc = roc_auc_score(y, preds)
-
-    meta = {
-        "roc_auc": float(auc),
-        "cutoff_date": str(T),
-        "features": FEATURES
-    }
-
-    # Serializar modelo
-    buffer = io.BytesIO()
-    joblib.dump(model, buffer)
-    buffer.seek(0)
-    binary_model = buffer.read()
-
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-
-        cur.execute(f"""
-            INSERT INTO {SCHEMA}.modelos_ml
-            (nombre_modelo, fecha_entrenamiento, cutoff_date, modelo, meta)
-            VALUES (%s, now(), %s, %s, %s)
-            ON CONFLICT (nombre_modelo)
-            DO UPDATE SET
-                fecha_entrenamiento = now(),
-                cutoff_date = EXCLUDED.cutoff_date,
-                modelo = EXCLUDED.modelo,
-                meta = EXCLUDED.meta;
-        """, (
-            "rf_ALL",
-            T,
-            psycopg2.Binary(binary_model),
-            json.dumps(meta)
-        ))
-
-        conn.commit()
-    finally:
-        conn.close()
-
-    return meta
 
 
 # =============================
@@ -241,6 +196,50 @@ def predict_next_days_geojson(horizonte=3):
         probs = 1 - (1 - probs)**horizonte
 
     df["riesgo_pct"] = probs * 100
+    
+    
+        # =============================
+    # GUARDAR HISTORICO
+    # =============================
+
+    fecha_pred_inicio = T + timedelta(days=1)
+    fecha_pred_fin = T + timedelta(days=horizonte)
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+
+        insert_sql = f"""
+            INSERT INTO {SCHEMA}.predicciones_historicas
+            (nombre_modelo, fecha_base, fecha_pred_inicio, fecha_pred_fin,
+            horizonte, id_celda, riesgo_pct, categoria)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (nombre_modelo, fecha_base, horizonte, id_celda)
+            DO NOTHING;
+        """
+
+        records = []
+
+        for _, row in df.iterrows():
+            riesgo = round(row["riesgo_pct"], 2)
+            categoria, _ = clasificar_riesgo(riesgo)
+
+            records.append((
+                "rf_ALL",
+                T,
+                fecha_pred_inicio,
+                fecha_pred_fin,
+                horizonte,
+                int(row["id_celda"]),
+                riesgo,
+                categoria
+            ))
+
+        psycopg2.extras.execute_batch(cur, insert_sql, records, page_size=1000)
+        conn.commit()
+
+    finally:
+        conn.close()
 
     features = []
 
